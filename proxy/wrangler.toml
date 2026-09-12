@@ -1,0 +1,11 @@
+name = "monkeyhub-oauth-proxy"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Optional hardening: uncomment and set this to your OAuth App's Client ID
+# so the proxy refuses to exchange codes for any other app.
+# [vars]
+# ALLOWED_CLIENT_ID = "Iv1.xxxxxxxxxxxxxxxx"
+
+# Set the real secret with:
+#   wrangler secret put GITHUB_CLIENT_SECRET

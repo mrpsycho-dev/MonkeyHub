@@ -1,0 +1,63 @@
+{
+  "manifest_version": 3,
+  "name": "MonkeyHub",
+  "version": "1.0.0",
+  "description": "Automatically syncs your Monkeytype results to a GitHub repository with a live, profile-style stats README.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    },
+    "default_title": "MonkeyHub"
+  },
+  "options_ui": {
+    "page": "dashboard/dashboard.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "scripts": [
+      "lib/constants.js",
+      "lib/browser-api.js",
+      "lib/util.js",
+      "lib/pkce.js",
+      "lib/storage.js",
+      "lib/github-client.js",
+      "lib/stats.js",
+      "lib/readme-generator.js",
+      "lib/oauth.js",
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://monkeytype.com/*"],
+      "js": ["content/content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content/page-bridge.js"],
+      "matches": ["https://monkeytype.com/*"]
+    }
+  ],
+  "permissions": ["storage", "identity", "notifications", "alarms"],
+  "host_permissions": [
+    "https://api.github.com/*"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "monkeyhub@example.dev",
+      "strict_min_version": "115.0"
+    }
+  }
+}

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>MonkeyHub Dashboard</title>
+<link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div class="brand">
+        <img src="../icons/icon32.png" alt="" class="brand__mark" />
+        <span class="brand__name">MonkeyHub</span>
+      </div>
+      <nav class="topnav">
+        <button class="topnav__btn is-active" data-section="overview">Overview</button>
+        <button class="topnav__btn" data-section="settings">Settings</button>
+      </nav>
+      <div class="topbar__right">
+        <div class="conn-pill" id="connPill" data-state="unknown">
+          <span class="conn-pill__dot"></span>
+          <span id="connLabel">Checking...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ============================ OVERVIEW ============================ -->
+    <main class="section is-active" data-section="overview">
+
+      <div class="banner" id="errorBanner" hidden>
+        <div id="errorBannerText"></div>
+        <button class="btn btn--ghost btn--sm" id="retryBtn">Retry sync</button>
+      </div>
+
+      <div class="empty-state" id="emptyState" hidden>
+        <h1>Let's get you set up</h1>
+        <p>Connect a GitHub account and finish a typing test on <a href="https://monkeytype.com" target="_blank" rel="noopener">monkeytype.com</a> - MonkeyHub takes care of the rest.</p>
+        <button class="btn btn--primary" id="emptyStateSettingsBtn">Open Settings</button>
+      </div>
+
+      <div id="overviewContent">
+        <section class="hero-row">
+          <div class="hero-card">
+            <div class="hero-card__value" id="heroValue">—</div>
+            <div class="hero-card__label" id="heroLabel">Best WPM</div>
+          </div>
+          <div class="mini-stats">
+            <div class="mini-stat"><span id="statTests">0</span><label>tests</label></div>
+            <div class="mini-stat"><span id="statTime">0m</span><label>time typed</label></div>
+            <div class="mini-stat"><span id="statAvgWpm">0</span><label>avg wpm</label></div>
+            <div class="mini-stat"><span id="statAvgAcc">0%</span><label>avg accuracy</label></div>
+            <div class="mini-stat"><span id="statStreak">0</span><label>day streak</label></div>
+            <div class="mini-stat"><span id="statLongestStreak">0</span><label>longest streak</label></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head">
+            <h2>Activity</h2>
+            <div class="sync-status" id="syncStatusText">Not synced yet</div>
+          </div>
+          <div class="calendar">
+            <div class="calendar-months" id="calMonths"></div>
+            <div class="calendar-grid" id="calGrid"></div>
+            <div class="calendar-legend">
+              <span>Less</span>
+              <span class="sq" data-level="0"></span>
+              <span class="sq" data-level="1"></span>
+              <span class="sq" data-level="2"></span>
+              <span class="sq" data-level="3"></span>
+              <span class="sq" data-level="4"></span>
+              <span>More</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="two-col">
+          <section class="panel">
+            <div class="panel__head"><h2>Personal bests</h2></div>
+            <table class="table" id="bestsTable">
+              <thead>
+                <tr><th>Mode</th><th>WPM</th><th>Raw</th><th>Accuracy</th><th>Consistency</th><th>Date</th></tr>
+              </thead>
+              <tbody id="bestsBody"></tbody>
+            </table>
+          </section>
+
+          <section class="panel">
+            <div class="panel__head"><h2>Recent tests</h2></div>
+            <table class="table" id="recentTable">
+              <thead>
+                <tr><th>When</th><th>Mode</th><th>WPM</th><th>Accuracy</th></tr>
+              </thead>
+              <tbody id="recentBody"></tbody>
+            </table>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel__head">
+            <h2>Sync activity</h2>
+            <span class="panel__hint">How MonkeyHub has handled GitHub, in order - includes rate limits, conflicts, and retries.</span>
+          </div>
+          <ul class="log" id="logList"></ul>
+        </section>
+      </div>
+    </main>
+
+    <!-- ============================ SETTINGS ============================ -->
+    <main class="section" data-section="settings">
+      <div class="settings-grid">
+
+        <section class="panel" id="authCardConnected" hidden>
+          <div class="panel__head"><h2>GitHub connection</h2></div>
+          <div class="account-row">
+            <img id="accountAvatar" class="account-row__avatar" alt="" />
+            <div>
+              <div class="account-row__name" id="accountName">—</div>
+              <div class="account-row__mode" id="accountMode">—</div>
+            </div>
+          </div>
+          <button class="btn btn--ghost btn--sm" id="signOutBtn">Disconnect</button>
+        </section>
+
+        <section class="panel" id="authCardDisconnected">
+          <div class="panel__head"><h2>Connect to GitHub</h2></div>
+          <p class="panel__hint">Recommended: OAuth2 + PKCE for real-time sync. This needs a one-time token-exchange proxy - see <code>/proxy</code> in the project and the README section "Why a proxy?".</p>
+          <div class="field-row">
+            <div class="field">
+              <label for="oauthClientId">OAuth App Client ID</label>
+              <input type="text" id="oauthClientId" placeholder="Iv1.xxxxxxxxxxxxxxxx" />
+            </div>
+            <div class="field">
+              <label for="proxyUrl">Token-exchange proxy URL</label>
+              <input type="text" id="proxyUrl" placeholder="https://your-proxy.workers.dev" />
+            </div>
+          </div>
+          <button class="btn btn--primary" id="connectOAuthBtn">Connect with GitHub</button>
+
+          <div class="divider"><span>or, for a 30-second setup</span></div>
+
+          <p class="panel__hint">Paste a fine-grained Personal Access Token (Settings → Developer settings → Fine-grained tokens on GitHub) scoped to <strong>Contents: Read and write</strong> on the target repository.</p>
+          <div class="field-row">
+            <div class="field">
+              <label for="patInput">Personal Access Token</label>
+              <input type="password" id="patInput" placeholder="github_pat_..." />
+            </div>
+            <button class="btn btn--secondary" id="connectPatBtn" style="align-self:end;">Use token</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head"><h2>Repository</h2></div>
+          <div class="field-row">
+            <div class="field">
+              <label for="cfgOwner">Owner</label>
+              <input type="text" id="cfgOwner" placeholder="defaults to your username" />
+            </div>
+            <div class="field">
+              <label for="cfgRepo">Repository name</label>
+              <input type="text" id="cfgRepo" placeholder="monkeytype-stats" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="cfgBranch">Branch</label>
+              <input type="text" id="cfgBranch" placeholder="main" />
+            </div>
+            <div class="field">
+              <label for="cfgVisibility">If MonkeyHub creates it</label>
+              <select id="cfgVisibility">
+                <option value="public">Public</option>
+                <option value="private">Private</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="cfgDataPath">Data file path</label>
+              <input type="text" id="cfgDataPath" placeholder="data/results.json" />
+            </div>
+            <div class="field">
+              <label for="cfgReadmePath">README path</label>
+              <input type="text" id="cfgReadmePath" placeholder="README.md" />
+            </div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="cfgCreateIfMissing" />
+            <span>Create the repository automatically if it doesn't exist</span>
+          </label>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head"><h2>Sync behavior</h2></div>
+          <label class="toggle">
+            <input type="checkbox" id="cfgAutoSync" />
+            <span>Sync automatically after every completed test</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="cfgNotifyOnError" />
+            <span>Notify me if a sync fails</span>
+          </label>
+          <div class="btn-row" style="margin-top:6px;">
+            <button class="btn btn--primary" id="syncNowBtn">Sync now</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__head"><h2>Data</h2></div>
+          <p class="panel__hint">Your full results log, exactly as committed to GitHub, lives locally too - export it any time.</p>
+          <div class="btn-row">
+            <button class="btn btn--ghost btn--sm" id="exportBtn">Export JSON</button>
+            <label class="btn btn--ghost btn--sm" for="importFile">Import JSON</label>
+            <input type="file" id="importFile" accept="application/json" hidden />
+            <button class="btn btn--ghost btn--sm" id="clearBtn">Clear local data</button>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="../lib/constants.js"></script>
+  <script src="../lib/browser-api.js"></script>
+  <script src="../lib/util.js"></script>
+  <script src="../lib/stats.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

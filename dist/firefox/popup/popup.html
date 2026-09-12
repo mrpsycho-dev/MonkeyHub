@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>MonkeyHub</title>
+<link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app__header">
+      <div class="brand">
+        <img src="../icons/icon32.png" alt="" class="brand__mark" />
+        <span class="brand__name">MonkeyHub</span>
+      </div>
+      <div class="conn-pill" id="connPill" data-state="unknown">
+        <span class="conn-pill__dot"></span>
+        <span class="conn-pill__label" id="connLabel">Checking...</span>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tabs__btn is-active" data-tab="status" role="tab" aria-selected="true">Status</button>
+      <button class="tabs__btn" data-tab="settings" role="tab" aria-selected="false">Settings</button>
+    </nav>
+
+    <main class="views">
+      <!-- ============================= STATUS VIEW ============================= -->
+      <section class="view is-active" data-view="status">
+
+        <div class="banner" id="errorBanner" hidden>
+          <div class="banner__text" id="errorBannerText"></div>
+          <button class="btn btn--ghost btn--sm" id="retryBtn">Retry</button>
+        </div>
+
+        <div class="hero">
+          <div class="hero__value" id="heroValue">—</div>
+          <div class="hero__label" id="heroLabel">Complete a test on monkeytype.com to get started</div>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat-tile">
+            <div class="stat-tile__value" id="statTests">0</div>
+            <div class="stat-tile__label">Tests</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-tile__value" id="statAvgWpm">0</div>
+            <div class="stat-tile__label">Avg WPM</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-tile__value" id="statAvgAcc">0%</div>
+            <div class="stat-tile__label">Avg acc</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-tile__value" id="statStreak">0</div>
+            <div class="stat-tile__label">Day streak</div>
+          </div>
+        </div>
+
+        <div class="sync-line">
+          <span id="syncStatusText">Not synced yet</span>
+          <a href="#" id="repoLink" class="sync-line__repo" target="_blank" rel="noopener" hidden></a>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn--primary" id="syncNowBtn">Sync now</button>
+          <button class="btn btn--secondary" id="openDashboardBtn">Open dashboard</button>
+        </div>
+      </section>
+
+      <!-- ============================ SETTINGS VIEW ============================ -->
+      <section class="view" data-view="settings">
+
+        <div class="card" id="authCardConnected" hidden>
+          <div class="card__title">Connected to GitHub</div>
+          <div class="account-row">
+            <img id="accountAvatar" class="account-row__avatar" alt="" />
+            <div>
+              <div class="account-row__name" id="accountName">—</div>
+              <div class="account-row__mode" id="accountMode">—</div>
+            </div>
+          </div>
+          <button class="btn btn--ghost btn--sm" id="signOutBtn">Disconnect</button>
+        </div>
+
+        <div class="card" id="authCardDisconnected">
+          <div class="card__title">Connect to GitHub</div>
+          <p class="card__hint">Recommended: OAuth2 + PKCE, kept in sync in real time. Needs a one-time proxy setup - see README.</p>
+          <div class="field">
+            <label for="oauthClientId">OAuth App Client ID</label>
+            <input type="text" id="oauthClientId" placeholder="Iv1.xxxxxxxxxxxxxxxx" />
+          </div>
+          <div class="field">
+            <label for="proxyUrl">Token-exchange proxy URL</label>
+            <input type="text" id="proxyUrl" placeholder="https://your-proxy.workers.dev" />
+          </div>
+          <button class="btn btn--primary" id="connectOAuthBtn">Connect with GitHub</button>
+
+          <div class="divider"><span>or</span></div>
+
+          <p class="card__hint">Quick start: paste a fine-grained Personal Access Token with read/write access to Contents. No proxy needed.</p>
+          <div class="field">
+            <label for="patInput">Personal Access Token</label>
+            <input type="password" id="patInput" placeholder="github_pat_..." />
+          </div>
+          <button class="btn btn--secondary" id="connectPatBtn">Use token</button>
+        </div>
+
+        <div class="card">
+          <div class="card__title">Repository</div>
+          <div class="field-row">
+            <div class="field">
+              <label for="cfgOwner">Owner</label>
+              <input type="text" id="cfgOwner" placeholder="defaults to your username" />
+            </div>
+            <div class="field">
+              <label for="cfgRepo">Repository name</label>
+              <input type="text" id="cfgRepo" placeholder="monkeytype-stats" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="cfgBranch">Branch</label>
+              <input type="text" id="cfgBranch" placeholder="main" />
+            </div>
+            <div class="field">
+              <label for="cfgVisibility">If MonkeyHub creates it</label>
+              <select id="cfgVisibility">
+                <option value="public">Public</option>
+                <option value="private">Private</option>
+              </select>
+            </div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="cfgCreateIfMissing" />
+            <span>Create the repository automatically if it doesn't exist</span>
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="card__title">Sync behavior</div>
+          <label class="toggle">
+            <input type="checkbox" id="cfgAutoSync" />
+            <span>Sync automatically after every completed test</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="cfgNotifyOnError" />
+            <span>Notify me if a sync fails</span>
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="card__title">Data</div>
+          <div class="btn-row">
+            <button class="btn btn--ghost btn--sm" id="exportBtn">Export JSON</button>
+            <button class="btn btn--ghost btn--sm" id="clearBtn">Clear local data</button>
+          </div>
+        </div>
+
+        <div class="toast" id="toast" hidden></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="../lib/constants.js"></script>
+  <script src="../lib/browser-api.js"></script>
+  <script src="../lib/util.js"></script>
+  <script src="../lib/stats.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
