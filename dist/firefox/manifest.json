@@ -27,7 +27,6 @@
       "lib/constants.js",
       "lib/browser-api.js",
       "lib/util.js",
-      "lib/pkce.js",
       "lib/storage.js",
       "lib/github-client.js",
       "lib/stats.js",
@@ -50,14 +49,18 @@
       "matches": ["https://monkeytype.com/*"]
     }
   ],
-  "permissions": ["storage", "identity", "notifications", "alarms"],
+  "permissions": ["storage", "notifications", "alarms"],
   "host_permissions": [
-    "https://api.github.com/*"
+    "https://api.github.com/*",
+    "https://github.com/*"
   ],
   "browser_specific_settings": {
     "gecko": {
       "id": "monkeyhub@example.dev",
-      "strict_min_version": "115.0"
+      "strict_min_version": "115.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   }
 }

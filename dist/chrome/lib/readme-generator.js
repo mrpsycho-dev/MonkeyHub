@@ -160,7 +160,7 @@ ${recentTestsTable(stats.recent)}
 
 ---
 
-<sub>This file is machine-generated from raw results in <code>${config.dataPath}</code>. Don't edit it by hand - your changes will be overwritten on the next sync. Want to stop syncing? Remove the MonkeyHub extension or disconnect it from Settings.</sub>
+<sub>This file is machine-generated from the raw results in <code>${config.dataDir}/</code> (split by test type). Don't edit it by hand - your changes will be overwritten on the next sync. Want to stop syncing? Remove the MonkeyHub extension or disconnect it from Settings.</sub>
 `;
 };
 

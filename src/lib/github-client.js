@@ -152,12 +152,13 @@ MH.describeError = function describeError(err) {
     [MH.KIND.FORBIDDEN_SSO]: "Your organization requires SSO authorization for this token. Authorize it from your GitHub organization settings, then retry.",
     [MH.KIND.FORBIDDEN_OTHER]: "GitHub refused the request (403). Check that the repository exists and your account has push access.",
     [MH.KIND.NOT_FOUND]: "The repository or file wasn't found.",
-    [MH.KIND.CONFLICT]: "The file changed on GitHub since MonkeyHub last read it. Merging the newest results and retrying.",
-    [MH.KIND.UNPROCESSABLE]: "GitHub rejected the write (422) - usually a stale version of the file. Refreshing and retrying.",
+    [MH.KIND.CONFLICT]: "The branch moved on GitHub since MonkeyHub last read it (another device, or a manual commit). Rebuilt the commit on the new branch head and retried.",
+    [MH.KIND.UNPROCESSABLE]: "GitHub rejected the commit (422) - usually the branch moved between MonkeyHub's read and write. Retried on the fresh branch head automatically.",
     [MH.KIND.SERVER_ERROR]: "GitHub is having issues on its end (5xx). Retrying with backoff.",
     [MH.KIND.UNKNOWN]: "Something unexpected happened talking to GitHub.",
   };
-  return map[err.kind] || err.message || "Unknown error.";
+  const base = map[err.kind] || err.message || "Unknown error.";
+  return err.githubMessage ? `${base} (GitHub said: "${err.githubMessage}")` : base;
 };
 
 function buildHeaders(auth, extra) {
@@ -334,35 +335,84 @@ MH.gh = {
   },
 
   /**
-   * Creates or updates a file. Pass `sha` when updating an existing file;
-   * omit it to create a new one. On a stale-sha conflict (409/422) the
-   * caller's `onConflict` hook is invoked with the *current* remote file so
-   * it can merge and retry once.
+   * Commits any number of text files in a single atomic commit using the
+   * Git Data API, instead of one Contents-API PUT (and one commit) per
+   * file. `files` is `[{ path, content }, ...]`; any path not listed is
+   * left untouched (the new tree is built on top of the branch's current
+   * tree, so this is a sparse update, not a full snapshot).
+   *
+   * The whole read-tree-commit-move-ref sequence is retried as a unit (not
+   * just the final ref update) with jittered backoff, because a race can
+   * surface as a 409/422 at *any* of those steps, not only the last one -
+   * retrying only the last step left earlier-step races unretried entirely.
    */
-  async putFile(auth, owner, repo, { path, branch, message, content, sha }, onConflict) {
-    const body = {
-      message,
-      content: MH.utf8ToBase64(content),
-      branch,
-    };
-    if (sha) body.sha = sha;
+  async commitFiles(auth, owner, repo, branch, files, message, maxRetries = 5) {
+    let lastErr;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        let baseCommitSha = null;
+        let baseTreeSha = null;
+        try {
+          const refRes = await MH.ghRequest(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`, { auth });
+          baseCommitSha = refRes.json.object.sha;
+          const commitRes = await MH.ghRequest(`/repos/${owner}/${repo}/git/commits/${baseCommitSha}`, { auth });
+          baseTreeSha = commitRes.json.tree.sha;
+        } catch (err) {
+          if (err.kind !== MH.KIND.NOT_FOUND) throw err;
+          // Branch doesn't exist yet (a genuinely empty repo, auto_init
+          // wasn't used, or a brand-new branch name) - build the very
+          // first commit on it from scratch, below.
+        }
 
-    try {
-      const res = await MH.ghRequest(`/repos/${owner}/${repo}/contents/${path}`, {
-        method: "PUT",
-        auth,
-        body,
-      });
-      return res.json;
-    } catch (err) {
-      const isStaleShaConflict =
-        (err.kind === MH.KIND.CONFLICT || err.kind === MH.KIND.UNPROCESSABLE) && sha;
-      if (isStaleShaConflict && onConflict) {
-        const resolved = await onConflict(err);
-        if (resolved) return resolved;
+        const treeBody = {
+          tree: files.map((f) => ({ path: f.path, mode: "100644", type: "blob", content: f.content })),
+        };
+        if (baseTreeSha) treeBody.base_tree = baseTreeSha;
+        const treeRes = await MH.ghRequest(`/repos/${owner}/${repo}/git/trees`, { method: "POST", auth, body: treeBody });
+
+        const commitBody = { message, tree: treeRes.json.sha };
+        if (baseCommitSha) commitBody.parents = [baseCommitSha];
+        const newCommitRes = await MH.ghRequest(`/repos/${owner}/${repo}/git/commits`, {
+          method: "POST",
+          auth,
+          body: commitBody,
+        });
+        const newCommitSha = newCommitRes.json.sha;
+
+        if (baseCommitSha) {
+          await MH.ghRequest(`/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, {
+            method: "PATCH",
+            auth,
+            body: { sha: newCommitSha, force: false },
+          });
+        } else {
+          await MH.ghRequest(`/repos/${owner}/${repo}/git/refs`, {
+            method: "POST",
+            auth,
+            body: { ref: `refs/heads/${branch}`, sha: newCommitSha },
+          });
+        }
+        return newCommitRes.json;
+      } catch (err) {
+        lastErr = err;
+        const isRace = err.kind === MH.KIND.UNPROCESSABLE || err.kind === MH.KIND.CONFLICT;
+        if (isRace && attempt < maxRetries) {
+          MH.appendLog({
+            type: "commit_retry",
+            message: `Commit attempt ${attempt}/${maxRetries} hit a ${err.kind === MH.KIND.CONFLICT ? "409" : "422"} (${err.githubMessage || "branch moved"}) - retrying.`,
+          }).catch(() => {});
+          // Jittered, growing backoff: on a genuine one-off race this
+          // resolves in one or two tries; if something else is
+          // persistently colliding (e.g. an overlapping sync from another
+          // trigger), spacing attempts out gives it room to finish instead
+          // of both sides retrying in lockstep forever.
+          await MH.sleep(250 * attempt + Math.random() * 400);
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
+    throw lastErr;
   },
 };
 

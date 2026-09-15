@@ -52,6 +52,19 @@ MH.sortedBucketKeys = function sortedBucketKeys(personalBests) {
   });
 };
 
+/** Groups results into per-mode buckets for MonkeyHub's split data files
+ * (data/time.json, data/words.json, ...). Anything with an unrecognized or
+ * missing mode lands in "unknown" rather than being dropped. */
+MH.groupResultsByMode = function groupResultsByMode(results) {
+  const buckets = {};
+  for (const mode of MH.DATA_FILE_MODES) buckets[mode] = [];
+  for (const r of results) {
+    const bucket = MH.DATA_FILE_MODES.includes(r.mode) ? r.mode : "unknown";
+    buckets[bucket].push(r);
+  }
+  return buckets;
+};
+
 /** Merges freshly captured results into an existing array, de-duplicating
  * by id and keeping the array sorted ascending by timestamp (append-only
  * log semantics, which keeps README/diff history readable on GitHub). */

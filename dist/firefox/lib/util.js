@@ -102,16 +102,6 @@ MH.formatDuration = function formatDuration(totalSeconds) {
   return `${sec}s`;
 };
 
-/** Cryptographically random URL-safe string, used for PKCE verifiers and
- * the OAuth `state` nonce. */
-MH.randomUrlSafeString = function randomUrlSafeString(byteLength = 32) {
-  const bytes = new Uint8Array(byteLength);
-  crypto.getRandomValues(bytes);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-};
-
 if (typeof module !== "undefined") {
   module.exports = MH;
 }

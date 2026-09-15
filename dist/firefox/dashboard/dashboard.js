@@ -18,6 +18,8 @@ function bucketKeyOf(r) {
   return r.mode === "time" || r.mode === "words" ? `${r.mode}:${r.mode2}` : r.mode;
 }
 
+let forceShowClientIdField = false;
+
 // ---------------------------------------------------------------------------
 // Nav
 // ---------------------------------------------------------------------------
@@ -39,8 +41,8 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 function renderCalendar(heatmapFlat) {
   const grid = $("#calGrid");
   const monthsRow = $("#calMonths");
-  grid.innerHTML = "";
-  monthsRow.innerHTML = "";
+  clearChildren(grid);
+  clearChildren(monthsRow);
 
   let max = 1;
   for (const d of heatmapFlat) if (!d.isFuture) max = Math.max(max, d.count);
@@ -130,41 +132,57 @@ function render(state) {
 
   // personal bests
   const bestsBody = $("#bestsBody");
-  bestsBody.innerHTML = "";
+  clearChildren(bestsBody);
   const keys = MH.sortedBucketKeys(stats.personalBests);
   if (keys.length === 0) {
-    bestsBody.innerHTML = `<tr><td colspan="6" style="font-family:var(--sans);color:var(--text-dim);">No tests yet.</td></tr>`;
+    bestsBody.appendChild(emptyRow(6, "No tests yet."));
   }
   for (const key of keys) {
     const r = stats.personalBests[key];
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td style="font-family:var(--sans);">${MH.bucketLabel(key)}</td><td>${MH.round1(r.wpm)}</td><td>${MH.round1(r.rawWpm)}</td><td>${MH.round1(r.acc)}%</td><td>${typeof r.consistency === "number" ? MH.round1(r.consistency) + "%" : "—"}</td><td>${new Date(r.timestamp).toLocaleDateString()}</td>`;
+    appendCell(tr, MH.bucketLabel(key), true);
+    appendCell(tr, String(MH.round1(r.wpm)));
+    appendCell(tr, String(MH.round1(r.rawWpm)));
+    appendCell(tr, `${MH.round1(r.acc)}%`);
+    appendCell(tr, typeof r.consistency === "number" ? `${MH.round1(r.consistency)}%` : "—");
+    appendCell(tr, new Date(r.timestamp).toLocaleDateString());
     bestsBody.appendChild(tr);
   }
 
   // recent tests
   const recentBody = $("#recentBody");
-  recentBody.innerHTML = "";
+  clearChildren(recentBody);
   if (stats.recent.length === 0) {
-    recentBody.innerHTML = `<tr><td colspan="4" style="font-family:var(--sans);color:var(--text-dim);">Nothing yet.</td></tr>`;
+    recentBody.appendChild(emptyRow(4, "Nothing yet."));
   }
   for (const r of stats.recent) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td style="font-family:var(--sans);">${new Date(r.timestamp).toLocaleString()}</td><td style="font-family:var(--sans);">${MH.bucketLabel(bucketKeyOf(r))}</td><td>${MH.round1(r.wpm)}</td><td>${MH.round1(r.acc)}%</td>`;
+    appendCell(tr, new Date(r.timestamp).toLocaleString(), true);
+    appendCell(tr, MH.bucketLabel(bucketKeyOf(r)), true);
+    appendCell(tr, String(MH.round1(r.wpm)));
+    appendCell(tr, `${MH.round1(r.acc)}%`);
     recentBody.appendChild(tr);
   }
 
   // log
   const logList = $("#logList");
-  logList.innerHTML = "";
+  clearChildren(logList);
   if (!log || log.length === 0) {
-    logList.innerHTML = `<li class="log__empty">No activity yet.</li>`;
+    const li = document.createElement("li");
+    li.className = "log__empty";
+    li.textContent = "No activity yet.";
+    logList.appendChild(li);
   }
   for (const entry of log || []) {
     const li = document.createElement("li");
     li.dataset.kind = entry.type;
-    const time = new Date(entry.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    li.innerHTML = `<time>${time}</time><span class="dot"></span><span>${escapeHtml(entry.message)}</span>`;
+    const time = document.createElement("time");
+    time.textContent = new Date(entry.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    const msg = document.createElement("span");
+    msg.textContent = entry.message;
+    li.append(time, dot, msg);
     logList.appendChild(li);
   }
 
@@ -174,8 +192,9 @@ function render(state) {
   if (auth.connected) {
     $("#accountAvatar").src = auth.avatarUrl || initialsAvatar(auth.name || auth.login);
     $("#accountName").textContent = auth.name || auth.login;
-    $("#accountMode").textContent = auth.mode === "oauth" ? "Connected via OAuth2 + PKCE" : "Connected via Personal Access Token";
+    $("#accountMode").textContent = auth.mode === "oauth" ? "Connected via GitHub sign-in" : "Connected via Personal Access Token";
   }
+  renderDeviceFlow(state.deviceFlow);
 
   const setIfNotFocused = (id, value) => {
     const el = document.getElementById(id);
@@ -184,20 +203,65 @@ function render(state) {
   setIfNotFocused("cfgOwner", config.owner || "");
   setIfNotFocused("cfgRepo", config.repo || "");
   setIfNotFocused("cfgBranch", config.branch || "");
-  setIfNotFocused("cfgDataPath", config.dataPath || "");
+  setIfNotFocused("cfgDataDir", config.dataDir || "");
   setIfNotFocused("cfgReadmePath", config.readmePath || "");
   $("#cfgVisibility").value = config.visibility || "public";
   $("#cfgCreateIfMissing").checked = !!config.createIfMissing;
   $("#cfgAutoSync").checked = !!config.autoSync;
   $("#cfgNotifyOnError").checked = !!config.notifyOnError;
+
+  const haveClientId = !!config.oauthClientId;
+  const showClientIdField = forceShowClientIdField || !haveClientId;
+  $("#clientIdField").hidden = !showClientIdField;
+  $("#useOwnClientIdBtn").hidden = !haveClientId || forceShowClientIdField;
   setIfNotFocused("oauthClientId", config.oauthClientId || "");
-  setIfNotFocused("proxyUrl", config.proxyUrl || "");
+  $("#authIntroText").textContent = haveClientId && !forceShowClientIdField
+    ? "One-click sign-in - no secrets, no proxy, nothing to fill in."
+    : "One-click sign-in - no secrets, no proxy, no redirect URI to register. First time only: create a free GitHub OAuth App and paste its Client ID below (see README, takes about a minute).";
 }
 
-function escapeHtml(s) {
-  const div = document.createElement("div");
-  div.textContent = s;
-  return div.innerHTML;
+function renderDeviceFlow(deviceFlow) {
+  const panel = $("#deviceFlowPanel");
+  if (!deviceFlow || deviceFlow.status !== "pending") {
+    panel.hidden = true;
+    $("#connectOAuthBtn").disabled = false;
+    if (deviceFlow && deviceFlow.status === "error" && deviceFlow.message && renderDeviceFlow._lastShown !== deviceFlow.message) {
+      renderDeviceFlow._lastShown = deviceFlow.message;
+      showToast(deviceFlow.message);
+    }
+    if (deviceFlow && deviceFlow.status === "success" && renderDeviceFlow._lastShown !== "success:" + deviceFlow.login) {
+      renderDeviceFlow._lastShown = "success:" + deviceFlow.login;
+      showToast(`Connected as @${deviceFlow.login}`);
+    }
+    return;
+  }
+  renderDeviceFlow._lastShown = null;
+  panel.hidden = false;
+  $("#connectOAuthBtn").disabled = true;
+  $("#deviceUserCode").textContent = deviceFlow.userCode;
+  $("#openDeviceVerifyBtn").href = deviceFlow.verificationUriComplete || deviceFlow.verificationUri;
+}
+
+function clearChildren(el) {
+  while (el.firstChild) el.removeChild(el.firstChild);
+}
+
+function appendCell(tr, text, useSansFont) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (useSansFont) td.style.fontFamily = "var(--sans)";
+  tr.appendChild(td);
+}
+
+function emptyRow(colspan, text) {
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = colspan;
+  td.style.fontFamily = "var(--sans)";
+  td.style.color = "var(--text-dim)";
+  td.textContent = text;
+  tr.appendChild(td);
+  return tr;
 }
 
 async function refresh() {
@@ -223,18 +287,37 @@ $("#signOutBtn").addEventListener("click", async () => {
   refresh();
 });
 
+$("#useOwnClientIdBtn").addEventListener("click", () => {
+  forceShowClientIdField = true;
+  refresh();
+});
+
 $("#connectOAuthBtn").addEventListener("click", async () => {
   const clientId = $("#oauthClientId").value.trim();
-  const proxyUrl = $("#proxyUrl").value.trim();
   if (!clientId) return showToast("Enter your OAuth App's Client ID first");
-  await send("MH_UPDATE_CONFIG", { partial: { oauthClientId: clientId, proxyUrl } });
+  await send("MH_UPDATE_CONFIG", { partial: { oauthClientId: clientId } });
   $("#connectOAuthBtn").disabled = true;
-  $("#connectOAuthBtn").textContent = "Waiting for GitHub...";
-  const res = await send("MH_SIGN_IN_OAUTH", { payload: { clientId, proxyUrl } });
-  $("#connectOAuthBtn").disabled = false;
-  $("#connectOAuthBtn").textContent = "Connect with GitHub";
-  if (!res.ok) return showToast(res.error || "Couldn't connect to GitHub");
-  showToast(`Connected as @${res.user.login}`);
+  const res = await send("MH_START_DEVICE_FLOW", { clientId });
+  if (!res.ok) {
+    $("#connectOAuthBtn").disabled = false;
+    return showToast(res.error || "Couldn't start GitHub sign-in");
+  }
+  MH.ext.tabs.create({ url: res.state.verificationUriComplete || res.state.verificationUri });
+  refresh();
+});
+
+$("#copyDeviceCodeBtn").addEventListener("click", async () => {
+  const code = $("#deviceUserCode").textContent;
+  try {
+    await navigator.clipboard.writeText(code);
+    showToast("Code copied");
+  } catch (_) {
+    showToast("Couldn't copy - select and copy manually");
+  }
+});
+
+$("#cancelDeviceFlowBtn").addEventListener("click", async () => {
+  await send("MH_CANCEL_DEVICE_FLOW");
   refresh();
 });
 
@@ -264,14 +347,13 @@ function bindConfigField(id, key) {
   ["cfgOwner", "owner"],
   ["cfgRepo", "repo"],
   ["cfgBranch", "branch"],
-  ["cfgDataPath", "dataPath"],
+  ["cfgDataDir", "dataDir"],
   ["cfgReadmePath", "readmePath"],
   ["cfgVisibility", "visibility"],
   ["cfgCreateIfMissing", "createIfMissing"],
   ["cfgAutoSync", "autoSync"],
   ["cfgNotifyOnError", "notifyOnError"],
   ["oauthClientId", "oauthClientId"],
-  ["proxyUrl", "proxyUrl"],
 ].forEach(([id, key]) => bindConfigField(id, key));
 
 $("#exportBtn").addEventListener("click", async () => {

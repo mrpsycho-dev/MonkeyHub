@@ -31,6 +31,8 @@ function bucketKeyOf(r) {
   return r.mode === "time" || r.mode === "words" ? `${r.mode}:${r.mode2}` : r.mode;
 }
 
+let forceShowClientIdField = false;
+
 function initialsAvatar(name) {
   const letter = (name || "?").trim().charAt(0).toUpperCase() || "?";
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" rx="32" fill="%23232733"/><text x="32" y="42" font-family="sans-serif" font-size="28" font-weight="700" fill="%23F5C453" text-anchor="middle">${letter}</text></svg>`;
@@ -99,8 +101,9 @@ function render(state) {
   if (auth.connected) {
     $("#accountAvatar").src = auth.avatarUrl || initialsAvatar(auth.name || auth.login);
     $("#accountName").textContent = auth.name || auth.login;
-    $("#accountMode").textContent = auth.mode === "oauth" ? "Connected via OAuth2 + PKCE" : "Connected via Personal Access Token";
+    $("#accountMode").textContent = auth.mode === "oauth" ? "Connected via GitHub sign-in" : "Connected via Personal Access Token";
   }
+  renderDeviceFlow(state.deviceFlow);
 
   // settings: config fields (only set if the user isn't actively typing in them)
   const setIfNotFocused = (id, value) => {
@@ -114,8 +117,37 @@ function render(state) {
   $("#cfgCreateIfMissing").checked = !!config.createIfMissing;
   $("#cfgAutoSync").checked = !!config.autoSync;
   $("#cfgNotifyOnError").checked = !!config.notifyOnError;
+
+  const haveClientId = !!config.oauthClientId;
+  const showClientIdField = forceShowClientIdField || !haveClientId;
+  $("#clientIdField").hidden = !showClientIdField;
+  $("#useOwnClientIdBtn").hidden = !haveClientId || forceShowClientIdField;
   setIfNotFocused("oauthClientId", config.oauthClientId || "");
-  setIfNotFocused("proxyUrl", config.proxyUrl || "");
+  $("#authIntroText").textContent = haveClientId && !forceShowClientIdField
+    ? "One-click sign-in - no secrets, no proxy, nothing to fill in."
+    : "One-click sign-in, no secrets or proxy needed. First time only: paste your GitHub OAuth App's Client ID (create one free, takes a minute - see README).";
+}
+
+function renderDeviceFlow(deviceFlow) {
+  const panel = $("#deviceFlowPanel");
+  if (!deviceFlow || deviceFlow.status !== "pending") {
+    panel.hidden = true;
+    $("#connectOAuthBtn").disabled = false;
+    if (deviceFlow && deviceFlow.status === "error" && deviceFlow.message && renderDeviceFlow._lastShown !== deviceFlow.message) {
+      renderDeviceFlow._lastShown = deviceFlow.message;
+      showToast(deviceFlow.message);
+    }
+    if (deviceFlow && deviceFlow.status === "success" && renderDeviceFlow._lastShown !== "success:" + deviceFlow.login) {
+      renderDeviceFlow._lastShown = "success:" + deviceFlow.login;
+      showToast(`Connected as @${deviceFlow.login}`);
+    }
+    return;
+  }
+  renderDeviceFlow._lastShown = null;
+  panel.hidden = false;
+  $("#connectOAuthBtn").disabled = true;
+  $("#deviceUserCode").textContent = deviceFlow.userCode;
+  $("#openDeviceVerifyBtn").href = deviceFlow.verificationUriComplete || deviceFlow.verificationUri;
 }
 
 async function refresh() {
@@ -144,21 +176,38 @@ $("#signOutBtn").addEventListener("click", async () => {
   refresh();
 });
 
+$("#useOwnClientIdBtn").addEventListener("click", () => {
+  forceShowClientIdField = true;
+  refresh();
+});
+
 $("#connectOAuthBtn").addEventListener("click", async () => {
   const clientId = $("#oauthClientId").value.trim();
-  const proxyUrl = $("#proxyUrl").value.trim();
   if (!clientId) return showToast("Enter your OAuth App's Client ID first");
-  await send("MH_UPDATE_CONFIG", { partial: { oauthClientId: clientId, proxyUrl } });
+  await send("MH_UPDATE_CONFIG", { partial: { oauthClientId: clientId } });
   $("#connectOAuthBtn").disabled = true;
-  $("#connectOAuthBtn").textContent = "Waiting for GitHub...";
-  const res = await send("MH_SIGN_IN_OAUTH", { payload: { clientId, proxyUrl } });
-  $("#connectOAuthBtn").disabled = false;
-  $("#connectOAuthBtn").textContent = "Connect with GitHub";
+  const res = await send("MH_START_DEVICE_FLOW", { clientId });
   if (!res.ok) {
-    showToast(res.error || "Couldn't connect to GitHub");
+    $("#connectOAuthBtn").disabled = false;
+    showToast(res.error || "Couldn't start GitHub sign-in");
     return;
   }
-  showToast(`Connected as @${res.user.login}`);
+  MH.ext.tabs.create({ url: res.state.verificationUriComplete || res.state.verificationUri });
+  refresh();
+});
+
+$("#copyDeviceCodeBtn").addEventListener("click", async () => {
+  const code = $("#deviceUserCode").textContent;
+  try {
+    await navigator.clipboard.writeText(code);
+    showToast("Code copied");
+  } catch (_) {
+    showToast("Couldn't copy - select and copy manually");
+  }
+});
+
+$("#cancelDeviceFlowBtn").addEventListener("click", async () => {
+  await send("MH_CANCEL_DEVICE_FLOW");
   refresh();
 });
 
@@ -197,7 +246,6 @@ bindConfigField("cfgCreateIfMissing", "createIfMissing");
 bindConfigField("cfgAutoSync", "autoSync");
 bindConfigField("cfgNotifyOnError", "notifyOnError");
 bindConfigField("oauthClientId", "oauthClientId");
-bindConfigField("proxyUrl", "proxyUrl");
 
 $("#exportBtn").addEventListener("click", async () => {
   const res = await send("MH_EXPORT_DATA");

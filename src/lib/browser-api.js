@@ -1,11 +1,10 @@
 // MonkeyHub - tiny cross-browser shim.
 //
 // Firefox's `browser.*` namespace is promise-based natively. Chrome's
-// `chrome.*` namespace supports promises for most calls in modern versions,
-// but a handful of call sites (notably identity.launchWebAuthFlow on older
-// Chrome, and any callback-only API) still expect a callback + lastError
-// check. `callApi` below normalizes both into a single promise-returning
-// call so the rest of the codebase never has to branch on browser.
+// `chrome.*` namespace also supports promises for the APIs MonkeyHub uses
+// (storage, alarms, notifications, tabs) when no callback is passed.
+// `callApi` below normalizes both into a single promise-returning call so
+// the rest of the codebase never has to branch on browser.
 
 var MH = self.MH || {};
 

@@ -84,25 +84,36 @@
 
         <div class="card" id="authCardDisconnected">
           <div class="card__title">Connect to GitHub</div>
-          <p class="card__hint">Recommended: OAuth2 + PKCE, kept in sync in real time. Needs a one-time proxy setup - see README.</p>
-          <div class="field">
+          <p class="card__hint" id="authIntroText">One-click sign-in, no secrets or proxy needed.</p>
+
+          <div class="field" id="clientIdField">
             <label for="oauthClientId">OAuth App Client ID</label>
             <input type="text" id="oauthClientId" placeholder="Iv1.xxxxxxxxxxxxxxxx" />
           </div>
-          <div class="field">
-            <label for="proxyUrl">Token-exchange proxy URL</label>
-            <input type="text" id="proxyUrl" placeholder="https://your-proxy.workers.dev" />
+          <button class="btn btn--primary" id="connectOAuthBtn">Authorize with GitHub</button>
+          <button class="btn btn--ghost btn--sm" id="useOwnClientIdBtn" hidden>Use a different OAuth App</button>
+
+          <div class="device-flow" id="deviceFlowPanel" hidden>
+            <p class="card__hint">We opened GitHub in a new tab - click <strong>Authorize</strong> there to finish connecting.</p>
+            <div class="device-code-row">
+              <span class="device-code" id="deviceUserCode">····-····</span>
+              <button class="btn btn--ghost btn--sm" id="copyDeviceCodeBtn">Copy</button>
+            </div>
+            <p class="card__hint" style="margin-top:-2px;">The code above should already be filled in on GitHub's page. If not, paste it there yourself.</p>
+            <a class="btn btn--secondary" id="openDeviceVerifyBtn" target="_blank" rel="noopener">Reopen the GitHub tab</a>
+            <div class="device-flow__status" id="deviceFlowStatus">Waiting for approval...</div>
+            <button class="btn btn--ghost btn--sm" id="cancelDeviceFlowBtn">Cancel</button>
           </div>
-          <button class="btn btn--primary" id="connectOAuthBtn">Connect with GitHub</button>
 
           <div class="divider"><span>or</span></div>
 
-          <p class="card__hint">Quick start: paste a fine-grained Personal Access Token with read/write access to Contents. No proxy needed.</p>
+          <p class="card__hint">Quick start: paste a fine-grained Personal Access Token with read/write access to Contents.</p>
           <div class="field">
             <label for="patInput">Personal Access Token</label>
             <input type="password" id="patInput" placeholder="github_pat_..." />
           </div>
           <button class="btn btn--secondary" id="connectPatBtn">Use token</button>
+
         </div>
 
         <div class="card">

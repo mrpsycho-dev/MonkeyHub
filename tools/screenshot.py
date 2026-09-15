@@ -77,9 +77,8 @@ def compute_state(page):
         "auth": {"connected": True, "mode": "oauth", "login": "octoteal", "name": "Teal Octocat", "avatarUrl": ""},
         "config": {
             "owner": "", "repo": "monkeytype-stats", "branch": "main",
-            "dataPath": "data/results.json", "readmePath": "README.md",
+            "dataDir": "data", "readmePath": "README.md",
             "autoSync": True, "createIfMissing": True, "visibility": "public",
-            "proxyUrl": "https://monkeyhub-oauth-proxy.octoteal.workers.dev",
             "oauthClientId": "Iv1.9f8a7b6c5d4e3f2a", "notifyOnError": True,
         },
         "stats": stats,
@@ -102,11 +101,21 @@ def compute_state(page):
 
 MOCK_JS_TEMPLATE = """
 window.__MH_STATE__ = %s;
+window.__MH_STATE__.deviceFlow = null;
 window.chrome = {
   runtime: {
     sendMessage: (msg) => {
       if (msg.type === 'MH_GET_STATE') return Promise.resolve({ ok: true, state: window.__MH_STATE__ });
       if (msg.type === 'MH_SYNC_NOW') return Promise.resolve({ ok: true });
+      if (msg.type === 'MH_START_DEVICE_FLOW') {
+        window.__MH_STATE__.deviceFlow = {
+          status: 'pending',
+          userCode: 'WDJB-MJHT',
+          verificationUri: 'https://github.com/login/device',
+          verificationUriComplete: 'https://github.com/login/device',
+        };
+        return Promise.resolve({ ok: true, state: window.__MH_STATE__.deviceFlow });
+      }
       return Promise.resolve({ ok: true });
     },
     getURL: (p) => p,
@@ -123,7 +132,7 @@ window.chrome = {
 """
 
 
-def shoot(pw, url, viewport, out_path, state, full_page=False, settle_ms=250, click_selector=None):
+def shoot(pw, url, viewport, out_path, state_overrides=None, full_page=False, settle_ms=250, click_selectors=None):
     browser = pw.chromium.launch()
     page = browser.new_page(viewport=viewport, device_scale_factor=2)
     # compute stats using the page's own MH.computeStats once libs are loaded,
@@ -133,13 +142,15 @@ def shoot(pw, url, viewport, out_path, state, full_page=False, settle_ms=250, cl
         page.add_script_tag(path=os.path.join(SRC, rel))
     page.evaluate("() => { window.chrome = {}; }")  # placeholder so browser-api.js's earlier MH.ext isn't reused oddly
     computed_state = compute_state(page)
+    if state_overrides:
+        computed_state.update(state_overrides)
 
     mock_js = MOCK_JS_TEMPLATE % json.dumps(computed_state)
     page.add_init_script(mock_js)
     page.goto(url)
     page.wait_for_timeout(settle_ms)
-    if click_selector:
-        page.click(click_selector)
+    for sel in click_selectors or []:
+        page.click(sel)
         page.wait_for_timeout(settle_ms)
     page.screenshot(path=out_path, full_page=full_page)
     browser.close()
@@ -151,13 +162,18 @@ def main():
         popup_url = f"file://{SRC}/popup/popup.html"
         dash_url = f"file://{SRC}/dashboard/dashboard.html"
 
-        shoot(pw, popup_url, {"width": 380, "height": 640}, os.path.join(OUT, "popup-status.png"), None)
-        shoot(pw, popup_url, {"width": 380, "height": 640}, os.path.join(OUT, "popup-settings.png"), None,
-              click_selector="button[data-tab='settings']")
-        shoot(pw, dash_url, {"width": 1180, "height": 1000}, os.path.join(OUT, "dashboard-overview.png"), None,
+        shoot(pw, popup_url, {"width": 380, "height": 640}, os.path.join(OUT, "popup-status.png"))
+        shoot(pw, popup_url, {"width": 380, "height": 640}, os.path.join(OUT, "popup-settings.png"),
+              click_selectors=["button[data-tab='settings']"])
+        shoot(pw, dash_url, {"width": 1180, "height": 1000}, os.path.join(OUT, "dashboard-overview.png"),
               full_page=True)
-        shoot(pw, dash_url, {"width": 1180, "height": 900}, os.path.join(OUT, "dashboard-settings.png"), None,
-              full_page=True, click_selector="button[data-section='settings']")
+        shoot(pw, dash_url, {"width": 1180, "height": 900}, os.path.join(OUT, "dashboard-settings.png"),
+              full_page=True, click_selectors=["button[data-section='settings']"])
+        shoot(
+            pw, popup_url, {"width": 380, "height": 640}, os.path.join(OUT, "popup-device-flow.png"),
+            state_overrides={"auth": {"connected": False}},
+            click_selectors=["button[data-tab='settings']", "#connectOAuthBtn"],
+        )
 
 
 if __name__ == "__main__":

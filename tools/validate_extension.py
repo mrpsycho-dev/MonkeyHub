@@ -120,11 +120,34 @@ def main():
             print("totalTests after capture:", total_tests)
             if total_tests != 1:
                 errors.append(f"Expected exactly 1 stored result after capture+dedup, got {total_tests}")
+            oauth_client_id = state["state"]["config"].get("oauthClientId")
+            print("oauthClientId with no bundled default set:", repr(oauth_client_id))
+            if oauth_client_id:
+                errors.append(f"Expected empty oauthClientId (no DEFAULT_OAUTH_CLIENT_ID set), got {oauth_client_id!r}")
             page3.screenshot(path=os.path.join(ROOT, ".shots", "live-dashboard-after-capture.png"))
             page3.reload()
             page3.wait_for_timeout(800)
             page3.screenshot(path=os.path.join(ROOT, ".shots", "live-dashboard-after-capture-reloaded.png"))
             page3.close()
+
+            # Device flow: this sandbox has no outbound network access, so
+            # the real GitHub round trip can't be exercised here - but the
+            # client-side "Client ID required" guard needs no network and
+            # is worth checking for real.
+            page4 = context.new_page()
+            page4.goto(f"chrome-extension://{ext_id}/dashboard/dashboard.html")
+            page4.click("button[data-section='settings']")
+            page4.click("#connectOAuthBtn")
+            page4.wait_for_timeout(400)
+            toast_text = page4.inner_text("#toast")
+            print("connect-without-client-id toast:", repr(toast_text))
+            if "Client ID" not in toast_text:
+                errors.append(f"Expected a 'Client ID' validation toast, got: {toast_text!r}")
+            panel_hidden = page4.get_attribute("#deviceFlowPanel", "hidden")
+            if panel_hidden is None:
+                errors.append("Device flow panel should stay hidden when Client ID is missing.")
+            page4.screenshot(path=os.path.join(ROOT, ".shots", "live-dashboard-device-flow-validation.png"))
+            page4.close()
 
         context.close()
 

@@ -4,8 +4,11 @@
 //   - receives captured results from content.js and merges them into the
 //     durable local store (chrome.storage.local IS the pending queue - a
 //     result is never lost just because a sync attempt fails)
-//   - runs the sync engine: ensure repo exists -> reconcile with remote ->
-//     write data file + README -> handle every edge case from github-client.js
+//   - debounces bursts of captures into a single sync, and writes every
+//     changed file (per-mode data files + README) as ONE commit via the
+//     Git Data API - never one commit per file
+//   - drives GitHub's device-flow sign-in (no client secret, no proxy, no
+//     redirect URI - see lib/oauth.js)
 //   - answers state queries from the popup/dashboard
 //   - retries on a timer via chrome.alarms, since MV3 service workers can be
 //     killed between events and a bare setTimeout would not survive that
@@ -20,7 +23,6 @@ if (typeof importScripts === "function") {
     "lib/constants.js",
     "lib/browser-api.js",
     "lib/util.js",
-    "lib/pkce.js",
     "lib/storage.js",
     "lib/github-client.js",
     "lib/stats.js",
@@ -31,6 +33,7 @@ if (typeof importScripts === "function") {
 
 let syncInFlight = false;
 let syncQueuedAgain = false;
+let syncDebounceTimer = null;
 
 function resolveOwner(config, auth) {
   return (config.owner && config.owner.trim()) || (auth && auth.login) || "";
@@ -95,6 +98,17 @@ function normalizeCaptured(raw) {
   );
 }
 
+/** Schedules a sync a few seconds out instead of running one immediately,
+ * so several tests finished in quick succession land in one commit instead
+ * of one commit each. Repeated calls simply push the timer back. */
+function scheduleSync() {
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(() => {
+    syncDebounceTimer = null;
+    runSync().catch((e) => console.error("[MonkeyHub] auto-sync failed", e));
+  }, MH.SYNC_DEBOUNCE_MS);
+}
+
 async function handleCapturedResult(rawResult) {
   const result = normalizeCaptured(rawResult);
   result.id = MH.resultId(result);
@@ -136,9 +150,7 @@ async function handleCapturedResult(rawResult) {
   });
 
   const config = await MH.getConfig();
-  if (config.autoSync) {
-    runSync().catch((e) => console.error("[MonkeyHub] auto-sync failed", e));
-  }
+  if (config.autoSync) scheduleSync();
   return { deduped: false, result };
 }
 
@@ -146,30 +158,14 @@ async function handleCapturedResult(rawResult) {
 // Sync engine
 // ---------------------------------------------------------------------------
 
-function buildCommitMessage(count) {
-  const now = new Date().toISOString().slice(0, 16).replace("T", " ");
-  return `MonkeyHub: sync ${count} result${count === 1 ? "" : "s"} (${now} UTC)`;
+function dataFilePath(config, mode) {
+  return `${config.dataDir.replace(/\/+$/, "")}/${mode}.json`;
 }
 
-async function tryRefreshAuth(auth, config) {
-  if (auth.mode !== "oauth" || !auth.refreshToken || !config.proxyUrl) return null;
-  try {
-    const refreshed = await MH.oauth.refreshAccessToken({
-      proxyUrl: config.proxyUrl,
-      clientId: config.oauthClientId,
-      refreshToken: auth.refreshToken,
-    });
-    const nextAuth = Object.assign({}, auth, {
-      accessToken: refreshed.access_token,
-      refreshToken: refreshed.refresh_token || auth.refreshToken,
-      expiresAt: refreshed.expires_in ? Date.now() + refreshed.expires_in * 1000 : null,
-    });
-    await MH.setAuth(nextAuth);
-    return nextAuth;
-  } catch (e) {
-    await MH.appendLog({ type: "auth_refresh_failed", message: e.message });
-    return null;
-  }
+function buildCommitMessage(changedModes, total) {
+  const now = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const modesPart = changedModes.length ? ` (${changedModes.join(", ")})` : "";
+  return `MonkeyHub: sync${modesPart} - ${total} total result${total === 1 ? "" : "s"} (${now} UTC)`;
 }
 
 async function runSync({ isRetry = false } = {}) {
@@ -177,12 +173,27 @@ async function runSync({ isRetry = false } = {}) {
     syncQueuedAgain = true;
     return { queued: true };
   }
+  // Defends against MV3 service worker restarts: the in-memory
+  // `syncInFlight` flag above only protects against overlap *within one
+  // worker lifetime*. If the worker was recycled mid-sync, a fresh
+  // instance's `syncInFlight` starts back at `false` even though a sync
+  // might still be genuinely in flight (or, more likely, died silently
+  // without ever clearing its status). A `syncing` status younger than
+  // this is treated as still active; older than it is treated as
+  // abandoned and safe to supersede.
+  const STALE_LOCK_MS = 45000;
+  const existingState = await MH.getSyncState();
+  if (existingState.status === "syncing" && existingState.syncLockAt && Date.now() - existingState.syncLockAt < STALE_LOCK_MS) {
+    syncQueuedAgain = true;
+    return { queued: true };
+  }
+
   syncInFlight = true;
   setBadge("syncing");
-  await MH.setSyncState({ status: "syncing" });
+  await MH.setSyncState({ status: "syncing", syncLockAt: Date.now() });
 
   try {
-    let auth = await MH.getAuth();
+    const auth = await MH.getAuth();
     if (!auth || !auth.accessToken) {
       await MH.setSyncState({ status: "error", lastError: { kind: "no_auth", message: "Not connected to GitHub yet.", at: Date.now() } });
       setBadge("idle");
@@ -198,14 +209,12 @@ async function runSync({ isRetry = false } = {}) {
       return { ok: false, kind: "no_repo" };
     }
 
-    let syncState = await MH.getSyncState();
-
     // 1. Ensure the repository exists ------------------------------------------------
     let repoInfo;
     try {
-      repoInfo = await MH.gh.repoExists(auth, owner, repo, syncState.lastEtagRepo);
+      repoInfo = await MH.gh.repoExists(auth, owner, repo);
     } catch (err) {
-      return await handleSyncError(err, auth, config, isRetry);
+      return await handleSyncError(err, isRetry);
     }
 
     if (!repoInfo.exists) {
@@ -228,119 +237,81 @@ async function runSync({ isRetry = false } = {}) {
           setBadge("error");
           return { ok: false, kind: "repo_create_conflict" };
         }
-        return await handleSyncError(err, auth, config, isRetry);
+        return await handleSyncError(err, isRetry);
       }
-    } else if (!repoInfo.cached) {
-      await MH.setSyncState({ lastEtagRepo: repoInfo.etag });
     }
 
-    // 2. Reconcile the data file with whatever's on GitHub already ------------------
+    // 2. Reconcile each non-empty per-mode data file with GitHub ---------------------
+    // Always read fresh (no cached sha/etag carried between syncs) so a
+    // changed token, a manual edit on GitHub, or a second device never
+    // collides with stale state MonkeyHub remembered from earlier.
     const local = await MH.getResultsStore();
-    let remoteFile;
+    const localBuckets = MH.groupResultsByMode(local.results);
+    const changedModes = Object.keys(localBuckets).filter((mode) => localBuckets[mode].length > 0);
+
+    const files = [];
+    let mergedAll = [];
     try {
-      remoteFile = await MH.gh.getFile(auth, owner, repo, config.dataPath, config.branch, syncState.lastEtagFile);
-    } catch (err) {
-      return await handleSyncError(err, auth, config, isRetry);
-    }
-
-    let remoteResults = [];
-    let dataSha = null;
-    if (remoteFile.exists && remoteFile.cached) {
-      remoteResults = local.results; // unchanged since our last read - nothing new to merge in
-      dataSha = syncState.lastSha;
-    } else if (remoteFile.exists) {
-      dataSha = remoteFile.sha;
-      try {
-        const parsed = JSON.parse(remoteFile.text);
-        remoteResults = Array.isArray(parsed.results) ? parsed.results : [];
-      } catch (_) {
-        await MH.appendLog({ type: "remote_parse_warning", message: "Remote data file wasn't valid JSON - overwriting with local data." });
-        remoteResults = [];
-      }
-    }
-
-    const merged = MH.mergeResults(remoteResults, local.results);
-    if (merged.length !== local.results.length) {
-      await MH.setResultsStore({ version: 1, results: merged });
-    }
-
-    const stats = MH.computeStats(merged);
-    const dataText = JSON.stringify(
-      { version: 1, generatedBy: "MonkeyHub", generatedAt: new Date().toISOString(), results: merged },
-      null,
-      2
-    );
-
-    // 3. Write the data file ----------------------------------------------------------
-    let putDataResult;
-    try {
-      putDataResult = await MH.gh.putFile(
-        auth,
-        owner,
-        repo,
-        { path: config.dataPath, branch: config.branch, message: buildCommitMessage(merged.length), content: dataText, sha: dataSha },
-        async () => {
-          const fresh = await MH.gh.getFile(auth, owner, repo, config.dataPath, config.branch);
-          const freshResults = fresh.exists ? JSON.parse(fresh.text).results || [] : [];
-          const reMerged = MH.mergeResults(freshResults, merged);
-          await MH.setResultsStore({ version: 1, results: reMerged });
-          const retryText = JSON.stringify(
-            { version: 1, generatedBy: "MonkeyHub", generatedAt: new Date().toISOString(), results: reMerged },
+      for (const mode of changedModes) {
+        const path = dataFilePath(config, mode);
+        const remote = await MH.gh.getFile(auth, owner, repo, path, config.branch);
+        let remoteResults = [];
+        if (remote.exists) {
+          try {
+            const parsed = JSON.parse(remote.text);
+            remoteResults = Array.isArray(parsed.results) ? parsed.results : [];
+          } catch (_) {
+            await MH.appendLog({ type: "remote_parse_warning", message: `${path} wasn't valid JSON on GitHub - overwriting with local data.` });
+          }
+        }
+        const merged = MH.mergeResults(remoteResults, localBuckets[mode]);
+        mergedAll = mergedAll.concat(merged);
+        files.push({
+          path,
+          content: JSON.stringify(
+            { version: 1, generatedBy: "MonkeyHub", mode, generatedAt: new Date().toISOString(), results: merged },
             null,
             2
-          );
-          const res = await MH.ghRequest(`/repos/${owner}/${repo}/contents/${config.dataPath}`, {
-            method: "PUT",
-            auth,
-            body: { message: buildCommitMessage(reMerged.length), content: MH.utf8ToBase64(retryText), branch: config.branch, sha: fresh.sha },
-          });
-          return res.json;
-        }
-      );
+          ),
+        });
+      }
     } catch (err) {
-      return await handleSyncError(err, auth, config, isRetry);
+      return await handleSyncError(err, isRetry);
     }
 
-    // 4. Write the README --------------------------------------------------------------
+    if (mergedAll.length !== local.results.length) {
+      mergedAll.sort((a, b) => a.timestamp - b.timestamp);
+      await MH.setResultsStore({ version: 1, results: mergedAll });
+    }
+
+    // 3. Regenerate the README from the full merged set -------------------------------
     const finalStore = await MH.getResultsStore();
     const finalStats = MH.computeStats(finalStore.results);
-    const readmeText = MH.generateReadme(finalStats, auth, config);
-    let readmeSha = syncState.lastReadmeSha;
-    if (!readmeSha) {
-      const readmeFile = await MH.gh.getFile(auth, owner, repo, config.readmePath, config.branch).catch(() => ({ exists: false }));
-      readmeSha = readmeFile.exists ? readmeFile.sha : null;
-    }
-    let putReadmeResult;
+    files.push({ path: config.readmePath, content: MH.generateReadme(finalStats, auth, config) });
+
+    // 4. One commit, everything at once ------------------------------------------------
+    let commit;
     try {
-      putReadmeResult = await MH.gh.putFile(
+      commit = await MH.gh.commitFiles(
         auth,
         owner,
         repo,
-        { path: config.readmePath, branch: config.branch, message: "MonkeyHub: update stats README", content: readmeText, sha: readmeSha },
-        async () => {
-          const fresh = await MH.gh.getFile(auth, owner, repo, config.readmePath, config.branch);
-          const res = await MH.ghRequest(`/repos/${owner}/${repo}/contents/${config.readmePath}`, {
-            method: "PUT",
-            auth,
-            body: { message: "MonkeyHub: update stats README", content: MH.utf8ToBase64(readmeText), branch: config.branch, sha: fresh.sha },
-          });
-          return res.json;
-        }
+        config.branch,
+        files,
+        buildCommitMessage(changedModes, finalStore.results.length)
       );
     } catch (err) {
-      return await handleSyncError(err, auth, config, isRetry);
+      return await handleSyncError(err, isRetry);
     }
 
     await MH.setSyncState({
       status: "idle",
       lastSyncAt: Date.now(),
-      lastSha: putDataResult.content.sha,
-      lastReadmeSha: putReadmeResult.content.sha,
-      lastEtagFile: null, // content just changed under us; drop the etag rather than risk a stale 304 next time
+      lastCommitSha: commit.sha,
       lastError: null,
       consecutiveFailures: 0,
     });
-    await MH.appendLog({ type: "sync_success", message: `Synced ${merged.length} results to ${owner}/${repo}.` });
+    await MH.appendLog({ type: "sync_success", message: `Committed ${files.length} file${files.length === 1 ? "" : "s"} (${finalStore.results.length} results total) to ${owner}/${repo}.` });
     setBadge("idle");
     return { ok: true };
   } finally {
@@ -352,17 +323,9 @@ async function runSync({ isRetry = false } = {}) {
   }
 }
 
-async function handleSyncError(err, auth, config, isRetry) {
+async function handleSyncError(err, isRetry) {
   const kind = err.kind || MH.KIND.UNKNOWN;
   const message = MH.describeError(err);
-
-  if (kind === MH.KIND.UNAUTHORIZED && !isRetry) {
-    const refreshed = await tryRefreshAuth(auth, config);
-    if (refreshed) {
-      syncInFlight = false; // allow the retry below to actually run
-      return runSync({ isRetry: true });
-    }
-  }
 
   const syncState = await MH.getSyncState();
   await MH.setSyncState({
@@ -384,20 +347,48 @@ async function handleSyncError(err, auth, config, isRetry) {
 }
 
 // ---------------------------------------------------------------------------
+// Device flow orchestration
+// ---------------------------------------------------------------------------
+
+async function startDeviceFlowAndPoll(clientId) {
+  const state = await MH.oauth.startDeviceFlow({ clientId });
+  // Fire-and-forget: keeps polling every `interval` seconds while this
+  // service worker instance is alive. If it gets recycled mid-wait, the
+  // periodic alarm below resumes polling from the persisted state.
+  MH.oauth.runFastPollLoop().then(async (finalState) => {
+    if (finalState && finalState.status === "success") {
+      await MH.appendLog({ type: "sync_success", message: `Connected to GitHub as @${finalState.login}.` });
+      scheduleSync();
+    }
+  }).catch((e) => console.error("[MonkeyHub] device flow poll failed", e));
+  return state;
+}
+
+async function resumePendingDeviceFlowIfAny() {
+  const state = await MH.oauth.getDeviceFlowState();
+  if (state && state.status === "pending") {
+    await MH.oauth.pollOnce();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Message router
 // ---------------------------------------------------------------------------
 
 async function getFullState() {
-  const [auth, config, store, syncState, log] = await Promise.all([
+  const [auth, config, store, syncState, log, deviceFlow] = await Promise.all([
     MH.getAuth(),
     MH.getConfig(),
     MH.getResultsStore(),
     MH.getSyncState(),
     MH.getLog(),
+    MH.oauth.getDeviceFlowState(),
   ]);
   const stats = MH.computeStats(store.results);
-  const safeAuth = auth ? { mode: auth.mode, login: auth.login, name: auth.name, avatarUrl: auth.avatarUrl, connected: true } : { connected: false };
-  return { auth: safeAuth, config, stats, syncState, log, resultCount: store.results.length };
+  const safeAuth = auth
+    ? { mode: auth.mode, login: auth.login, name: auth.name, avatarUrl: auth.avatarUrl, connected: true }
+    : { connected: false };
+  return { auth: safeAuth, config, stats, syncState, log, resultCount: store.results.length, deviceFlow };
 }
 
 MH.ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -423,16 +414,25 @@ MH.ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: true, config: next });
           break;
         }
-        case "MH_SIGN_IN_OAUTH": {
-          const { auth, user } = await MH.oauth.signInWithOAuth(message.payload);
-          sendResponse({ ok: true, auth, user });
-          runSync().catch(() => {});
+        case "MH_START_DEVICE_FLOW": {
+          const state = await startDeviceFlowAndPoll(message.clientId);
+          sendResponse({ ok: true, state });
+          break;
+        }
+        case "MH_GET_DEVICE_FLOW_STATUS": {
+          const state = await MH.oauth.getDeviceFlowState();
+          sendResponse({ ok: true, state });
+          break;
+        }
+        case "MH_CANCEL_DEVICE_FLOW": {
+          await MH.oauth.cancelDeviceFlow();
+          sendResponse({ ok: true });
           break;
         }
         case "MH_SIGN_IN_PAT": {
           const { auth, user } = await MH.oauth.signInWithPat(message.token);
           sendResponse({ ok: true, auth, user });
-          runSync().catch(() => {});
+          scheduleSync();
           break;
         }
         case "MH_SIGN_OUT": {
@@ -471,8 +471,9 @@ MH.ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ---------------------------------------------------------------------------
-// Lifecycle: alarms keep retrying even if the service worker was asleep,
-// and onInstalled opens the dashboard so first-run setup is discoverable.
+// Lifecycle: alarms keep retrying (and resume an interrupted device-flow
+// poll) even if the service worker was asleep. onInstalled opens the
+// dashboard so first-run setup is discoverable.
 // ---------------------------------------------------------------------------
 
 MH.ext.runtime.onInstalled.addListener((details) => {
@@ -489,9 +490,21 @@ MH.ext.runtime.onStartup.addListener(() => {
 MH.ext.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== MH.ALARM_NAME) return;
   (async () => {
-    const [auth, config, syncState] = await Promise.all([MH.getAuth(), MH.getConfig(), MH.getSyncState()]);
+    await resumePendingDeviceFlowIfAny();
+    const [auth, config, syncState, store] = await Promise.all([
+      MH.getAuth(),
+      MH.getConfig(),
+      MH.getSyncState(),
+      MH.getResultsStore(),
+    ]);
     if (!auth) return;
-    if (syncState.status === "error" || config.autoSync) {
+    // Retry a genuine failure, or catch up on results captured after the
+    // last successful sync whose scheduled sync never actually ran (e.g.
+    // the service worker was recycled mid-debounce and the setTimeout was
+    // lost with it). Otherwise, nothing changed - don't sync just because
+    // five minutes passed.
+    const hasUnsynced = store.results.some((r) => !syncState.lastSyncAt || r.timestamp > syncState.lastSyncAt);
+    if (syncState.status === "error" || (config.autoSync && hasUnsynced)) {
       runSync().catch((e) => console.error("[MonkeyHub] periodic sync failed", e));
     }
   })();

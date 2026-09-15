@@ -29,7 +29,16 @@ MH.clearAuth = () => MH.storageRemove(MH.KEYS.AUTH);
 
 MH.getConfig = async () => {
   const stored = await MH.storageGet(MH.KEYS.CONFIG, null);
-  return Object.assign({}, MH.DEFAULT_CONFIG, stored || {});
+  const merged = Object.assign({}, MH.DEFAULT_CONFIG, stored || {});
+  // A user-entered Client ID always wins; otherwise fall back to a Client
+  // ID baked into this build (see constants.js#DEFAULT_OAUTH_CLIENT_ID).
+  if (!merged.oauthClientId && MH.DEFAULT_OAUTH_CLIENT_ID) {
+    merged.oauthClientId = MH.DEFAULT_OAUTH_CLIENT_ID;
+    merged.oauthClientIdIsBundled = true;
+  } else {
+    merged.oauthClientIdIsBundled = false;
+  }
+  return merged;
 };
 MH.setConfig = async (partial) => {
   const current = await MH.getConfig();

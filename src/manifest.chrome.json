@@ -39,9 +39,10 @@
       "matches": ["https://monkeytype.com/*"]
     }
   ],
-  "permissions": ["storage", "identity", "notifications", "alarms"],
+  "permissions": ["storage", "notifications", "alarms"],
   "host_permissions": [
-    "https://api.github.com/*"
+    "https://api.github.com/*",
+    "https://github.com/*"
   ],
   "minimum_chrome_version": "116"
 }

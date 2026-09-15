@@ -124,18 +124,29 @@
 
         <section class="panel" id="authCardDisconnected">
           <div class="panel__head"><h2>Connect to GitHub</h2></div>
-          <p class="panel__hint">Recommended: OAuth2 + PKCE for real-time sync. This needs a one-time token-exchange proxy - see <code>/proxy</code> in the project and the README section "Why a proxy?".</p>
-          <div class="field-row">
+          <p class="panel__hint" id="authIntroText">One-click sign-in - no secrets, no proxy, no redirect URI to register.</p>
+          <div class="field-row" id="clientIdField">
             <div class="field">
               <label for="oauthClientId">OAuth App Client ID</label>
               <input type="text" id="oauthClientId" placeholder="Iv1.xxxxxxxxxxxxxxxx" />
             </div>
-            <div class="field">
-              <label for="proxyUrl">Token-exchange proxy URL</label>
-              <input type="text" id="proxyUrl" placeholder="https://your-proxy.workers.dev" />
-            </div>
           </div>
-          <button class="btn btn--primary" id="connectOAuthBtn">Connect with GitHub</button>
+          <div class="btn-row">
+            <button class="btn btn--primary" id="connectOAuthBtn">Authorize with GitHub</button>
+            <button class="btn btn--ghost btn--sm" id="useOwnClientIdBtn" hidden>Use a different OAuth App</button>
+          </div>
+
+          <div class="device-flow" id="deviceFlowPanel" hidden>
+            <p class="panel__hint">We opened GitHub in a new tab - click <strong>Authorize</strong> there to finish connecting.</p>
+            <div class="device-code-row">
+              <span class="device-code" id="deviceUserCode">····-····</span>
+              <button class="btn btn--ghost btn--sm" id="copyDeviceCodeBtn">Copy</button>
+            </div>
+            <p class="panel__hint" style="margin-top:-4px;">The code above should already be filled in on GitHub's page. If not, paste it there yourself.</p>
+            <a class="btn btn--secondary" id="openDeviceVerifyBtn" target="_blank" rel="noopener">Reopen the GitHub tab</a>
+            <div class="device-flow__status">Waiting for approval...</div>
+            <button class="btn btn--ghost btn--sm" id="cancelDeviceFlowBtn">Cancel</button>
+          </div>
 
           <div class="divider"><span>or, for a 30-second setup</span></div>
 
@@ -176,14 +187,15 @@
           </div>
           <div class="field-row">
             <div class="field">
-              <label for="cfgDataPath">Data file path</label>
-              <input type="text" id="cfgDataPath" placeholder="data/results.json" />
+              <label for="cfgDataDir">Data folder</label>
+              <input type="text" id="cfgDataDir" placeholder="data" />
             </div>
             <div class="field">
               <label for="cfgReadmePath">README path</label>
               <input type="text" id="cfgReadmePath" placeholder="README.md" />
             </div>
           </div>
+          <p class="panel__hint" style="margin-top:-4px;">Results are split into one file per test type inside the data folder - <code>time.json</code>, <code>words.json</code>, <code>quote.json</code>, <code>zen.json</code>, <code>custom.json</code>.</p>
           <label class="toggle">
             <input type="checkbox" id="cfgCreateIfMissing" />
             <span>Create the repository automatically if it doesn't exist</span>
